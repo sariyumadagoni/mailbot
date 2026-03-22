@@ -23,7 +23,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/debug', (req, res) => {
   res.json({
     hasClientId: !!process.env.GOOGLE_CLIENT_ID,
-    clientIdStart: process.env.GOOGLE_CLIENT_ID?.slice(0, 10),
+    clientIdStart: process.env.GOOGLE_CLIENT_ID?.slice(0, 15),
     nodeEnv: process.env.NODE_ENV
   })
 })
