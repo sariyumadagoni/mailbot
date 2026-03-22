@@ -36,7 +36,7 @@ router.get('/callback', async (req, res) => {
   req.session.tokens = tokens;
   fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
   console.log('✅ Gmail tokens saved to file!');
-  res.redirect('http://localhost:5173?connected=true');
+res.redirect('https://mailbot-alpha.vercel.app?connected=true');
 });
 
 router.get('/status', async (req, res) => {
