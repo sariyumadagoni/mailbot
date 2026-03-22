@@ -1,4 +1,3 @@
-cat > routes/auth.js << 'EOF'
 const express = require('express');
 const { google } = require('googleapis');
 const router = express.Router();
@@ -24,7 +23,6 @@ router.get('/login', (req, res) => {
 router.get('/callback', async (req, res) => {
   const { code, error } = req.query;
   if (error) return res.status(400).json({ error });
-
   try {
     const oauth2Client = getOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
@@ -45,4 +43,3 @@ router.get('/logout', (req, res) => {
 });
 
 module.exports = router;
-EOF

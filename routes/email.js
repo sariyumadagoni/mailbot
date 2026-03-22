@@ -1,4 +1,3 @@
-cat > routes/email.js << 'EOF'
 const express = require('express');
 const { google } = require('googleapis');
 const router = express.Router();
@@ -29,4 +28,3 @@ router.post('/send', async (req, res) => {
 });
 
 module.exports = router;
-EOF
