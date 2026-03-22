@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 
-const API = 'http://localhost:3001'
+const API = 'https://mailbot-production-78f1.up.railway.app'
 
 export default function App() {
   const [input, setInput] = useState('')
