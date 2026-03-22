@@ -1,10 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
-const fs = require('fs');
-const path = require('path');
-
-const TOKENS_PATH = path.join(__dirname, '..', 'tokens.json');
 
 function getOAuthClient() {
   return new google.auth.OAuth2(
@@ -12,25 +8,6 @@ function getOAuthClient() {
     process.env.GOOGLE_CLIENT_SECRET,
     process.env.GOOGLE_REDIRECT_URI
   );
-}
-
-function loadTokens() {
-  try {
-    if (fs.existsSync(TOKENS_PATH)) {
-      return JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
-    }
-  } catch (e) {
-    console.error('Failed to load tokens.json:', e.message);
-  }
-  return null;
-}
-
-function saveTokens(tokens) {
-  try {
-    fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
-  } catch (e) {
-    console.error('Failed to save tokens.json:', e.message);
-  }
 }
 
 // GET /auth/login — redirect user to Google OAuth consent screen
@@ -53,7 +30,7 @@ router.get('/callback', async (req, res) => {
 
   if (error) {
     console.error('OAuth error:', error);
-    return res.redirect('/?auth=error&reason=' + encodeURIComponent(error));
+    return res.status(400).json({ error, authenticated: false });
   }
 
   if (!code) {
@@ -63,33 +40,55 @@ router.get('/callback', async (req, res) => {
   try {
     const oauth2Client = getOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens);
 
-    // Persist tokens to file and session
-    saveTokens(tokens);
+    // Save tokens in session only (no file — Railway filesystem is ephemeral)
     req.session.tokens = tokens;
     req.session.authenticated = true;
 
-    console.log('✅ Auth successful, tokens saved');
-    res.redirect('/?auth=success');
+    // Force session save before responding
+    req.session.save((err) => {
+      if (err) {
+        console.error('Session save error:', err.message);
+        return res.status(500).json({ error: 'Session could not be saved' });
+      }
+      console.log('✅ Auth successful, tokens stored in session');
+      res.json({ authenticated: true, message: 'Login successful! You can now use the API.' });
+    });
   } catch (err) {
     console.error('Token exchange failed:', err.message);
-    res.redirect('/?auth=error&reason=' + encodeURIComponent(err.message));
+    res.status(500).json({ error: 'Token exchange failed', details: err.message });
   }
 });
 
-// GET /auth/status — check if user is authenticated
-router.get('/status', (req, res) => {
-  const sessionTokens = req.session?.tokens;
-  const fileTokens = loadTokens();
-  const tokens = sessionTokens || fileTokens;
+// GET /auth/status — check if the current session is authenticated
+router.get('/status', async (req, res) => {
+  const tokens = req.session?.tokens;
 
-  if (!tokens) {
+  if (!tokens?.access_token && !tokens?.refresh_token) {
     return res.json({ authenticated: false });
   }
 
-  // Check if access token is expired
   const isExpired = tokens.expiry_date && Date.now() > tokens.expiry_date;
+
+  // Auto-refresh if expired and refresh token is available
+  if (isExpired && tokens.refresh_token) {
+    try {
+      const oauth2Client = getOAuthClient();
+      oauth2Client.setCredentials(tokens);
+      const { credentials } = await oauth2Client.refreshAccessToken();
+      req.session.tokens = credentials;
+      console.log('🔄 Token auto-refreshed on status check');
+      return res.json({
+        authenticated: true,
+        expired: false,
+        refreshed: true,
+        hasRefreshToken: !!credentials.refresh_token,
+      });
+    } catch (err) {
+      console.error('Auto-refresh failed:', err.message);
+      return res.json({ authenticated: false, reason: 'Token expired and refresh failed' });
+    }
+  }
 
   res.json({
     authenticated: true,
@@ -99,21 +98,20 @@ router.get('/status', (req, res) => {
   });
 });
 
-// GET /auth/refresh — manually refresh the access token
+// GET /auth/refresh — manually force a token refresh
 router.get('/refresh', async (req, res) => {
-  const fileTokens = loadTokens();
-  const tokens = req.session?.tokens || fileTokens;
+  const tokens = req.session?.tokens;
 
   if (!tokens?.refresh_token) {
-    return res.status(401).json({ error: 'No refresh token available. Please re-authenticate via /auth/login' });
+    return res.status(401).json({
+      error: 'No refresh token in session. Please re-authenticate via /auth/login',
+    });
   }
 
   try {
     const oauth2Client = getOAuthClient();
     oauth2Client.setCredentials(tokens);
-
     const { credentials } = await oauth2Client.refreshAccessToken();
-    saveTokens(credentials);
     req.session.tokens = credentials;
 
     console.log('✅ Token refreshed successfully');
@@ -124,11 +122,10 @@ router.get('/refresh', async (req, res) => {
   }
 });
 
-// POST /auth/logout — clear session and optionally revoke token
+// POST /auth/logout — revoke token and destroy session
 router.post('/logout', async (req, res) => {
-  const tokens = req.session?.tokens || loadTokens();
+  const tokens = req.session?.tokens;
 
-  // Optionally revoke the token with Google
   if (tokens?.access_token) {
     try {
       const oauth2Client = getOAuthClient();
@@ -139,11 +136,10 @@ router.post('/logout', async (req, res) => {
     }
   }
 
-  // Clear tokens file and session
-  try { fs.writeFileSync(TOKENS_PATH, '{}'); } catch (_) {}
-  req.session.destroy();
-
-  res.json({ success: true, message: 'Logged out successfully' });
+  req.session.destroy((err) => {
+    if (err) console.error('Session destroy error:', err.message);
+    res.json({ success: true, message: 'Logged out successfully' });
+  });
 });
 
 module.exports = router;
