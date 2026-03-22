@@ -20,5 +20,11 @@ app.use('/auth', require('./routes/auth'));
 app.use('/email', require('./routes/email'));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
+app.get('/debug', (req, res) => {
+  res.json({
+    hasClientId: !!process.env.GOOGLE_CLIENT_ID,
+    clientIdStart: process.env.GOOGLE_CLIENT_ID?.slice(0, 10),
+    nodeEnv: process.env.NODE_ENV
+  })
+})
 app.listen(3001, () => console.log('✅ Server running on http://localhost:3001'));
