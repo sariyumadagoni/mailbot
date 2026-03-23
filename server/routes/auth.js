@@ -78,7 +78,7 @@ router.get('/callback', async (req, res) => {
         return res.status(500).json({ error: 'Session could not be saved' });
       }
       console.log('✅ Auth successful, tokens stored in session');
-      res.json({ authenticated: true, message: 'Login successful! You can now use the API.' });
+      res.redirect(process.env.FRONTEND_URL || 'https://mailbot-alpha.vercel.app');
     });
   } catch (err) {
     console.error('Token exchange failed:', err.message);
