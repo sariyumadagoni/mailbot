@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
+const fs = require('fs');
+const path = require('path');
+
+const TOKENS_PATH = path.join(__dirname, '..', 'tokens.json');
 
 function getOAuthClient() {
   return new google.auth.OAuth2(
@@ -41,7 +45,15 @@ router.get('/callback', async (req, res) => {
     const oauth2Client = getOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
 
-    // Save tokens in session only (no file — Railway filesystem is ephemeral)
+    // Save tokens to file as fallback
+    try {
+      fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+      console.log('✅ Tokens saved to file');
+    } catch (fileErr) {
+      console.warn('Could not save tokens to file:', fileErr.message);
+    }
+
+    // Save tokens in session
     req.session.tokens = tokens;
     req.session.authenticated = true;
 
@@ -77,6 +89,7 @@ router.get('/status', async (req, res) => {
       oauth2Client.setCredentials(tokens);
       const { credentials } = await oauth2Client.refreshAccessToken();
       req.session.tokens = credentials;
+      fs.writeFileSync(TOKENS_PATH, JSON.stringify(credentials, null, 2));
       console.log('🔄 Token auto-refreshed on status check');
       return res.json({
         authenticated: true,
@@ -113,6 +126,7 @@ router.get('/refresh', async (req, res) => {
     oauth2Client.setCredentials(tokens);
     const { credentials } = await oauth2Client.refreshAccessToken();
     req.session.tokens = credentials;
+    fs.writeFileSync(TOKENS_PATH, JSON.stringify(credentials, null, 2));
 
     console.log('✅ Token refreshed successfully');
     res.json({ success: true, expiry_date: credentials.expiry_date });
@@ -134,6 +148,13 @@ router.post('/logout', async (req, res) => {
     } catch (err) {
       console.warn('Token revocation failed (may already be expired):', err.message);
     }
+  }
+
+  // Delete tokens file
+  try {
+    if (fs.existsSync(TOKENS_PATH)) fs.unlinkSync(TOKENS_PATH);
+  } catch (e) {
+    console.warn('Could not delete tokens file:', e.message);
   }
 
   req.session.destroy((err) => {
