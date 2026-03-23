@@ -3,6 +3,19 @@ import axios from 'axios'
 
 const API = 'https://mailbot-production-78f1.up.railway.app'
 
+// Helper to get/set token in localStorage
+const getToken = () => localStorage.getItem('mailbot_token')
+const setToken = (t) => localStorage.setItem('mailbot_token', t)
+const clearToken = () => localStorage.removeItem('mailbot_token')
+
+// Axios instance that always sends token
+const api = axios.create({ baseURL: API })
+api.interceptors.request.use(config => {
+  const token = getToken()
+  if (token) config.headers['Authorization'] = `Bearer ${token}`
+  return config
+})
+
 export default function App() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState([
@@ -34,25 +47,40 @@ export default function App() {
   const undoRef = useRef(null)
 
   useEffect(() => {
-    // Check auth status and get user email
-    axios.get(`${API}/auth/status`, { withCredentials: true })
-      .then(res => {
-        setConnected(res.data.connected)
-        if (res.data.email) setUserEmail(res.data.email)
-      })
+    // Check for token in URL (just returned from OAuth)
+    const params = new URLSearchParams(window.location.search)
+    const urlToken = params.get('token')
+    const isConnected = params.get('connected') === 'true'
 
-    // Request browser notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission()
+    if (urlToken) {
+      setToken(urlToken)
+      window.history.replaceState({}, '', '/')
     }
 
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('connected') === 'true') {
+    if (isConnected) {
       setConnected(true)
       setMessages(prev => [...prev, {
         role: 'ai', text: '✅ Gmail connected! Now tell me who to email and what to say.'
       }])
-      window.history.replaceState({}, '', '/')
+    }
+
+    // Check auth status using stored token
+    const storedToken = urlToken || getToken()
+    if (storedToken) {
+      api.get('/auth/status')
+        .then(res => {
+          setConnected(res.data.authenticated)
+          if (res.data.email) setUserEmail(res.data.email)
+        })
+        .catch(() => {
+          clearToken()
+          setConnected(false)
+        })
+    }
+
+    // Request browser notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission()
     }
   }, [])
 
@@ -65,7 +93,7 @@ export default function App() {
   }, [])
 
   const fetchScheduled = async () => {
-    const res = await axios.get(`${API}/email/scheduled`, { withCredentials: true })
+    const res = await api.get('/email/scheduled')
     setScheduledList(res.data.scheduled)
   }
 
@@ -137,7 +165,7 @@ export default function App() {
     setLoading(true)
     setMessages(prev => [...prev, { role: 'ai', text: '✍️ Drafting your email...' }])
     try {
-      const res = await axios.post(`${API}/email/draft`, { userMessage: userMsg }, { withCredentials: true })
+      const res = await api.post('/email/draft', { userMessage: userMsg })
       const d = res.data.draft
       setDraft(d)
       setEditTo(d.to)
@@ -277,7 +305,7 @@ export default function App() {
   const actuallySendEmail = async (emailToSend) => {
     setSending(true)
     try {
-      await axios.post(`${API}/email/send`, emailToSend, { withCredentials: true })
+      await api.post('/email/send', emailToSend)
       setMessages(prev => {
         const filtered = prev.filter(m => !m.text.includes('seconds... click Undo'))
         return [...filtered, { role: 'ai', text: `✅ Email sent to ${emailToSend.to}! 🎉` }]
@@ -301,10 +329,10 @@ export default function App() {
     window.speechSynthesis.cancel()
     setScheduling(true)
     try {
-      await axios.post(`${API}/email/schedule`, {
+      await api.post('/email/schedule', {
         to: editTo, subject: editSubject, body: editBody,
         sendAt: scheduleTime, createdBy: userEmail
-      }, { withCredentials: true })
+      })
       setDraft(null)
       setEditing(false)
       setScheduleTime('')
@@ -321,15 +349,13 @@ export default function App() {
   }
 
   const deleteScheduled = async (id) => {
-    await axios.delete(`${API}/email/scheduled/${id}`, { withCredentials: true })
+    await api.delete(`/email/scheduled/${id}`)
     fetchScheduled()
   }
 
   const submitFeedback = async () => {
     if (feedback.rating === 0) return alert('Please select a star rating!')
-    await axios.post(`${API}/email/feedback`, {
-      rating: feedback.rating, comment: feedback.comment
-    }, { withCredentials: true })
+    await api.post('/email/feedback', { rating: feedback.rating, comment: feedback.comment })
     setFeedback(prev => ({ ...prev, sent: true }))
     setTimeout(() => setFeedback({ show: false, rating: 0, comment: '', sent: false }), 2000)
   }
