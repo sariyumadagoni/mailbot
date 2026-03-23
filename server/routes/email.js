@@ -45,27 +45,39 @@ function saveJSON(filePath, data) {
 }
 
 async function getAuthenticatedGmail(req) {
+  // Try Bearer token from Authorization header first (cross-domain frontend)
+  const authHeader = req.headers['authorization'];
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  // Fall back to session tokens, then tokens.json file
   const tokens = req.session?.tokens || loadTokens();
-  if (!tokens) throw new Error('Not authenticated. Visit /auth/login first.');
 
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
     process.env.GOOGLE_REDIRECT_URI
   );
-  oauth2Client.setCredentials(tokens);
 
-  // Auto-refresh if expired
-  if (tokens.expiry_date && Date.now() > tokens.expiry_date - 60000) {
-    try {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      saveTokens(credentials);
-      req.session.tokens = credentials;
-      oauth2Client.setCredentials(credentials);
-      console.log('🔄 Token auto-refreshed');
-    } catch (err) {
-      throw new Error('Token expired and refresh failed. Visit /auth/login to re-authenticate.');
+  if (bearerToken) {
+    // Use the Bearer token directly
+    oauth2Client.setCredentials({ access_token: bearerToken });
+  } else if (tokens) {
+    oauth2Client.setCredentials(tokens);
+
+    // Auto-refresh if expired
+    if (tokens.expiry_date && Date.now() > tokens.expiry_date - 60000) {
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        saveTokens(credentials);
+        if (req.session) req.session.tokens = credentials;
+        oauth2Client.setCredentials(credentials);
+        console.log('🔄 Token auto-refreshed');
+      } catch (err) {
+        throw new Error('Token expired and refresh failed. Please re-authenticate.');
+      }
     }
+  } else {
+    throw new Error('Not authenticated. Please connect Gmail first.');
   }
 
   return google.gmail({ version: 'v1', auth: oauth2Client });
@@ -87,6 +99,41 @@ function buildRawEmail({ to, subject, body, replyToMessageId, threadId }) {
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
+
+// POST /email/draft — AI-powered email drafting via Claude
+router.post('/draft', async (req, res) => {
+  const { userMessage } = req.body;
+
+  if (!userMessage) {
+    return res.status(400).json({ error: 'Missing userMessage' });
+  }
+
+  try {
+    const systemPrompt = `You are MailBot, an AI email assistant. The user will tell you who to email and what to say.
+Extract the recipient email address, generate a subject line, and write the email body.
+Always respond with a JSON object in this exact format (no markdown, no backticks):
+{
+  "to": "recipient@example.com",
+  "subject": "email subject line",
+  "body": "full email body text"
+}
+If no email address is mentioned, use an empty string for "to".`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+
+    const text = response.content[0]?.text || '';
+    const parsed = JSON.parse(text);
+    res.json({ draft: { to: parsed.to, subject: parsed.subject, body: parsed.body } });
+  } catch (err) {
+    console.error('Draft failed:', err.message);
+    res.status(500).json({ error: 'Failed to draft email: ' + err.message });
+  }
+});
 
 // POST /email/send — send an email via Gmail
 router.post('/send', async (req, res) => {
@@ -133,7 +180,6 @@ router.get('/inbox', async (req, res) => {
 
     const messages = listRes.data.messages || [];
 
-    // Fetch metadata for each message in parallel
     const detailed = await Promise.all(
       messages.map((m) =>
         gmail.users.messages.get({
@@ -166,6 +212,12 @@ router.get('/inbox', async (req, res) => {
   }
 });
 
+// GET /email/scheduled — list all scheduled emails
+router.get('/scheduled', (req, res) => {
+  const scheduled = loadJSON(SCHEDULED_PATH, []);
+  res.json({ scheduled });
+});
+
 // GET /email/:id — fetch full email content
 router.get('/:id', async (req, res) => {
   try {
@@ -179,7 +231,6 @@ router.get('/:id', async (req, res) => {
     const headers = msg.data.payload?.headers || [];
     const get = (name) => headers.find((h) => h.name === name)?.value || '';
 
-    // Extract plain text body
     let body = '';
     const parts = msg.data.payload?.parts || [];
     const textPart = parts.find((p) => p.mimeType === 'text/plain');
@@ -267,14 +318,8 @@ router.post('/schedule', (req, res) => {
   res.json({ success: true, scheduled: entry });
 });
 
-// GET /email/scheduled/list — list all scheduled emails
-router.get('/scheduled/list', (req, res) => {
-  const scheduled = loadJSON(SCHEDULED_PATH, []);
-  res.json({ scheduled });
-});
-
-// DELETE /email/schedule/:id — cancel a scheduled email
-router.delete('/schedule/:id', (req, res) => {
+// DELETE /email/scheduled/:id — cancel a scheduled email
+router.delete('/scheduled/:id', (req, res) => {
   let scheduled = loadJSON(SCHEDULED_PATH, []);
   const before = scheduled.length;
   scheduled = scheduled.filter((e) => e.id !== req.params.id);
