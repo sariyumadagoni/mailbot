@@ -10,7 +10,13 @@ const app = express();
 // Trust Railway's proxy so secure cookies work over HTTPS
 app.set('trust proxy', 1);
 
-app.use(cors({ origin: /^http:\/\/localhost:\d+$/, credentials: true }));
+app.use(cors({
+  origin: [
+    /^http:\/\/localhost:\d+$/,
+    'https://mailbot-alpha.vercel.app'
+  ],
+  credentials: true
+}));
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-secret',
