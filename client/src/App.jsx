@@ -62,20 +62,13 @@ export default function App() {
       setMessages(prev => [...prev, {
         role: 'ai', text: '✅ Gmail connected! Now tell me who to email and what to say.'
       }])
+      return // skip status check, we just came from OAuth
     }
 
-    // Check auth status using stored token
-    const storedToken = urlToken || getToken()
+    // On revisit, check if we have a stored token
+    const storedToken = getToken()
     if (storedToken) {
-      api.get('/auth/status')
-        .then(res => {
-          setConnected(res.data.authenticated)
-          if (res.data.email) setUserEmail(res.data.email)
-        })
-        .catch(() => {
-          clearToken()
-          setConnected(false)
-        })
+      setConnected(true) // trust the stored token
     }
 
     // Request browser notification permission
