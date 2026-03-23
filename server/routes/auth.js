@@ -78,7 +78,10 @@ router.get('/callback', async (req, res) => {
         return res.status(500).json({ error: 'Session could not be saved' });
       }
       console.log('✅ Auth successful, tokens stored in session');
-      res.redirect(process.env.FRONTEND_URL || 'https://mailbot-alpha.vercel.app');
+      // Pass access_token in URL so frontend can store it (cross-domain session fix)
+      const frontendURL = process.env.FRONTEND_URL || 'https://mailbot-alpha.vercel.app';
+      const tokenParam = encodeURIComponent(tokens.access_token);
+      res.redirect(`${frontendURL}?connected=true&token=${tokenParam}`);
     });
   } catch (err) {
     console.error('Token exchange failed:', err.message);
